@@ -462,6 +462,10 @@
   .lang-toggle button + button { border-left: 0.5px solid var(--border); }
   .lang-toggle button.active { background: var(--surface-brand); color: var(--text-invert); }
   .conv-head { font-size: 13px; color: var(--text-secondary); margin-bottom: 14px; }
+  .card.sms-entry { border-style: dashed; }
+  .badge.warn { background: #FFF1D6; color: #8A5A00; }
+  .conv-head button { margin-left: 10px; }
+  .note.sms-note { font-size: 12.5px; color: var(--text-secondary); margin: 0 0 12px; }
   @media (max-width: 600px) {
     main { padding: 16px; }
     header { padding: 16px; }
@@ -582,6 +586,24 @@
       exportAction: "Export",
       loadingAgents: "Loading agents...",
       selectAgent: "Select an agent.",
+      smsEntry: "All SMS on the lines",
+      smsEntryMeta: "Every SMS sent or received on the company's lines, including messages sent through the API and prospects who never replied.",
+      smsHeader: "All SMS on the lines",
+      smsThreadHeader: (p) => `SMS \u2014 ${p}`,
+      loadingSms: "Loading SMS...",
+      noSmsPeriod: "No SMS in this period.",
+      smsCapturedSince: (d) => d ? `SMS are recorded from ${d} onwards. Earlier messages aren't available.` : "No SMS recorded yet. Messages appear here from the moment recording is switched on.",
+      smsAllLines: "All lines",
+      smsSentReceived: (s, r) => `${s} sent \u00b7 ${r} received`,
+      smsNoReply: "No reply",
+      smsTruncated: "Showing the 500 most recent threads. Narrow the period to see older ones.",
+      smsOutbound: "Sent",
+      smsOutboundApi: "Sent (API or AI agent)",
+      smsInbound: "Prospect",
+      smsMedia: (n) => `${n} attachment(s)`,
+      smsOpenAgent: "Open the AI agent conversation",
+      smsNoAgentConv: "The AI agent has no conversation for this number.",
+      smsStatus: (st) => `status: ${st}`,
       noAgents: "No messaging agents found.",
       active: "Active", inactive: "Inactive",
       updated: (d) => `Updated ${d}`,
@@ -690,6 +712,24 @@
       exportAction: "Exporter",
       loadingAgents: "Chargement des agents...",
       selectAgent: "S\u00e9lectionnez un agent.",
+      smsEntry: "Tous les SMS des lignes",
+      smsEntryMeta: "Tous les SMS envoy\u00e9s ou re\u00e7us sur les lignes de l'entreprise, y compris ceux envoy\u00e9s via l'API et les prospects qui n'ont jamais r\u00e9pondu.",
+      smsHeader: "Tous les SMS des lignes",
+      smsThreadHeader: (p) => `SMS \u2014 ${p}`,
+      loadingSms: "Chargement des SMS...",
+      noSmsPeriod: "Aucun SMS sur cette p\u00e9riode.",
+      smsCapturedSince: (d) => d ? `Les SMS sont enregistr\u00e9s \u00e0 partir du ${d}. Les messages ant\u00e9rieurs ne sont pas disponibles.` : "Aucun SMS enregistr\u00e9 pour l'instant. Les messages appara\u00eetront ici d\u00e8s l'activation de l'enregistrement.",
+      smsAllLines: "Toutes les lignes",
+      smsSentReceived: (s, r) => `${s} envoy\u00e9(s) \u00b7 ${r} re\u00e7u(s)`,
+      smsNoReply: "Pas de r\u00e9ponse",
+      smsTruncated: "Seuls les 500 \u00e9changes les plus r\u00e9cents sont affich\u00e9s. R\u00e9duisez la p\u00e9riode pour voir les plus anciens.",
+      smsOutbound: "Envoy\u00e9",
+      smsOutboundApi: "Envoy\u00e9 (API ou agent IA)",
+      smsInbound: "Prospect",
+      smsMedia: (n) => `${n} pi\u00e8ce(s) jointe(s)`,
+      smsOpenAgent: "Ouvrir la conversation de l'agent IA",
+      smsNoAgentConv: "L'agent IA n'a pas de conversation pour ce num\u00e9ro.",
+      smsStatus: (st) => `statut : ${st}`,
       noAgents: "Aucun agent de messagerie trouv\u00e9.",
       active: "Actif", inactive: "Inactif",
       updated: (d) => `Mis \u00e0 jour le ${d}`,
@@ -816,6 +856,8 @@
   let lastHasMore = false;
   let viewToken = 0; // bumps on every navigation so stale async renders are dropped
   let currentTab = "conversations";
+  let mode = "agent"; // "agent" or "sms": which list the range filter reloads
+  let smsLineId = "";
 
   const $ = (id) => document.getElementById(id);
   const unlockScreen = $("unlockScreen"), appScreen = $("appScreen");
@@ -834,13 +876,17 @@
   unlockBtn.addEventListener("click", unlock);
   accessCodeInput.addEventListener("keydown", (e) => { if (e.key === "Enter") unlock(); });
   backBtn.addEventListener("click", () => {
-    if (backBtn.dataset.target === "agents") loadAgents();
+    const target = backBtn.dataset.target;
+    if (target === "agents") loadAgents();
+    else if (target === "sms") loadSmsThreads();
+    else if (target === "smsThread") loadSmsThread(backBtn.dataset.lineId, backBtn.dataset.phone);
     else loadConversationsPage(currentPageNum);
   });
   filtersEl.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
     rangeDays = b.dataset.range;
     filtersEl.querySelectorAll("button").forEach((x) => x.classList.toggle("active", x === b));
-    if (currentTab === "stats") loadStats(); else loadConversations(selectedAgent);
+    if (mode === "sms") loadSmsThreads();
+    else if (currentTab === "stats") loadStats(); else loadConversations(selectedAgent);
   }));
   viewTabsEl.querySelectorAll("button").forEach((b) => b.addEventListener("click", () => {
     currentTab = b.dataset.tab;
@@ -916,7 +962,12 @@
     paginationTabsEl.hidden = true;
     headerSubtitle.textContent = t("selectAgent");
     setStatus(agents.length ? "" : t("noAgents"), false);
-    contentEl.innerHTML = agents.map((a) => `
+    mode = "agent";
+    contentEl.innerHTML = `
+      <div class="card sms-entry" id="smsEntry">
+        <div class="row"><span class="name">${escapeHtml(t("smsEntry"))}</span></div>
+        <div class="meta">${escapeHtml(t("smsEntryMeta"))}</div>
+      </div>` + agents.map((a) => `
       <div class="card" data-agent-id="${escapeHtml(a.id)}" data-agent-name="${escapeHtml(a.name)}">
         <div class="row">
           <span class="name">${escapeHtml(a.name)}</span>
@@ -925,7 +976,8 @@
         <div class="meta">${escapeHtml(t("updated", a.updatedAt ? formatDate(a.updatedAt) : t("unknown")))}</div>
       </div>
     `).join("");
-    contentEl.querySelectorAll(".card").forEach((card) => {
+    $("smsEntry").addEventListener("click", () => { smsLineId = ""; loadSmsThreads(); });
+    contentEl.querySelectorAll(".card[data-agent-id]").forEach((card) => {
       card.addEventListener("click", () => loadConversations({ id: card.dataset.agentId, name: card.dataset.agentName }));
     });
   }
@@ -948,6 +1000,7 @@
 
   async function loadConversationsPage(pageNum) {
     const token = ++viewToken;
+    mode = "agent";
     currentPageNum = pageNum;
     rerender = () => loadConversationsPage(pageNum);
     backBtn.hidden = false;
@@ -1030,23 +1083,30 @@
     return results;
   }
 
-  async function loadThread(conversationId) {
+  async function loadThread(conversationId, from) {
     const token = ++viewToken;
-    rerender = () => loadThread(conversationId);
+    rerender = () => loadThread(conversationId, from);
     backBtn.hidden = false;
-    backBtn.dataset.target = "conversations";
+    if (from) {
+      backBtn.dataset.target = "smsThread";
+      backBtn.dataset.lineId = from.lineId;
+      backBtn.dataset.phone = from.phone;
+    } else {
+      backBtn.dataset.target = "conversations";
+    }
     filtersEl.hidden = true;
     viewTabsEl.hidden = true;
     exportBtn.hidden = true;
     paginationTabsEl.hidden = true;
-    headerSubtitle.textContent = t("threadHeader", selectedAgent.name);
+    headerSubtitle.textContent = selectedAgent ? t("threadHeader", selectedAgent.name) : "";
     setStatus(t("loadingConversation"), false);
     contentEl.innerHTML = "";
 
     const result = await apiFetch({ view: "conversation", conversationId });
     if (token !== viewToken) return;
-    if (!result.ok) { setStatus(result.error, true); return; }
+    if (!result.ok) { setStatus(from && result.error === t("errNotFound") ? t("smsNoAgentConv") : result.error, true); return; }
     const { conversation, turns } = result.data;
+    if (!selectedAgent) headerSubtitle.textContent = t("threadHeader", conversation.agentName);
 
     contentEl.innerHTML = `
       <div class="conv-head">${escapeHtml(conversation.phoneNumber || conversation.id)} &middot; ${escapeHtml((conversation.channel || "").toUpperCase())} &middot; ${escapeHtml(t("turnsBadge", turns.length))}</div>
@@ -1473,6 +1533,99 @@
     a.click();
     a.remove();
     URL.revokeObjectURL(url);
+  }
+
+  // ---------- line SMS (from Aircall message webhooks) ----------
+
+  async function loadSmsThreads() {
+    const token = ++viewToken;
+    mode = "sms";
+    selectedAgent = null;
+    rerender = () => loadSmsThreads();
+    backBtn.hidden = false;
+    backBtn.dataset.target = "agents";
+    viewTabsEl.hidden = true;
+    filtersEl.hidden = false;
+    exportBtn.hidden = true;
+    paginationTabsEl.hidden = true;
+    headerSubtitle.textContent = t("smsHeader");
+    setStatus(t("loadingSms"), false);
+    contentEl.innerHTML = "";
+
+    const params = { view: "sms_threads", ...rangeParams() };
+    if (smsLineId) params.lineId = smsLineId;
+    const result = await apiFetch(params);
+    if (token !== viewToken) return;
+    if (!result.ok) { setStatus(result.error, true); return; }
+    const { capturedSince, lines, threads, truncated } = result.data;
+
+    let html = `<p class="note sms-note">${escapeHtml(t("smsCapturedSince", capturedSince ? formatDate(capturedSince) : null))}</p>`;
+    if (lines.length > 1 || smsLineId) {
+      html += `<div class="filters" id="smsLines">
+        <button class="secondary${smsLineId ? "" : " active"}" data-line="">${escapeHtml(t("smsAllLines"))}</button>
+        ${lines.map((l) => `<button class="secondary${l.id === smsLineId ? " active" : ""}" data-line="${escapeHtml(l.id)}">${escapeHtml(l.name || l.id)} (${l.threads})</button>`).join("")}
+      </div>`;
+    }
+    html += threads.map((th) => `
+      <div class="card" data-line-id="${escapeHtml(th.lineId)}" data-phone="${escapeHtml(th.phoneNumber)}">
+        <div class="row">
+          <span class="name">${escapeHtml(th.phoneNumber)}</span>
+          <span>
+            ${th.received ? "" : `<span class="badge warn">${escapeHtml(t("smsNoReply"))}</span>`}
+            <span class="badge">${escapeHtml(t("smsSentReceived", th.sent, th.received))}</span>
+          </span>
+        </div>
+        <div class="meta">${th.lineName ? `${escapeHtml(th.lineName)} &middot; ` : ""}${escapeHtml(t("lastActivity", formatDate(th.lastAt)))}</div>
+        ${th.lastBody ? `<div class="preview">${escapeHtml(th.lastBody)}</div>` : ""}
+      </div>`).join("");
+    contentEl.innerHTML = html;
+    setStatus(threads.length ? (truncated ? t("smsTruncated") : "") : t("noSmsPeriod"), false);
+
+    contentEl.querySelectorAll("#smsLines button").forEach((b) => b.addEventListener("click", () => {
+      smsLineId = b.dataset.line;
+      loadSmsThreads();
+    }));
+    contentEl.querySelectorAll(".card[data-phone]").forEach((card) => {
+      card.addEventListener("click", () => loadSmsThread(card.dataset.lineId, card.dataset.phone));
+    });
+  }
+
+  async function loadSmsThread(lineId, phone) {
+    const token = ++viewToken;
+    mode = "sms";
+    selectedAgent = null;
+    rerender = () => loadSmsThread(lineId, phone);
+    backBtn.hidden = false;
+    backBtn.dataset.target = "sms";
+    viewTabsEl.hidden = true;
+    filtersEl.hidden = true;
+    exportBtn.hidden = true;
+    paginationTabsEl.hidden = true;
+    headerSubtitle.textContent = t("smsThreadHeader", phone);
+    setStatus(t("loadingSms"), false);
+    contentEl.innerHTML = "";
+
+    const result = await apiFetch({ view: "sms_thread", lineId, phone });
+    if (token !== viewToken) return;
+    if (!result.ok) { setStatus(result.error, true); return; }
+    const { lineName, conversationId, messages } = result.data;
+    const hasReply = messages.some((m) => m.direction === "inbound");
+
+    const bubbles = messages.map((m) => {
+      const inbound = m.direction === "inbound";
+      const who = inbound ? t("smsInbound") : (m.sender ? `${t("smsOutbound")} · ${m.sender}` : t("smsOutboundApi"));
+      const extra = [formatDate(m.createdAt)];
+      if (!inbound && m.status) extra.push(t("smsStatus", m.status));
+      if (m.media) extra.push(t("smsMedia", m.media));
+      return `<div class="bubble ${inbound ? "customer" : "agent"}"><div class="meta">${escapeHtml(who)} &middot; ${escapeHtml(extra.join(" · "))}</div>${escapeHtml(m.body)}</div>`;
+    }).join("");
+    contentEl.innerHTML = `
+      <div class="conv-head">${escapeHtml(phone)}${lineName ? ` &middot; ${escapeHtml(lineName)}` : ""} &middot; ${messages.length} SMS
+        ${hasReply ? `<button class="secondary" id="openAgentConv">${escapeHtml(t("smsOpenAgent"))}</button>` : ""}
+      </div>
+      <div class="thread">${bubbles}</div>`;
+    setStatus("", false);
+    if (hasReply) $("openAgentConv").addEventListener("click", () => loadThread(conversationId, { lineId, phone }));
   }
 
   function formatDate(s) {
